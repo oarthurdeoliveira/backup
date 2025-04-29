@@ -1,0 +1,135 @@
+#!/bin/bash
+
+# Get the path of the script
+temp=$( realpath "$0"  )
+main_path="$(dirname $temp)"
+
+
+nome="linux-$(date +%d-%m-%Y)"
+log_latest="latest.log"
+log_data="log-$(date +%d-%m-%Y).log"
+log_path=$main_path/backup-logs/
+version="0.2.2"
+
+dependecies_commands=("rclone" "zip")
+
+rclone_remote=""
+file_folder=""
+encryption_flag=""
+encryption_file_name=""
+helper_flag=""
+file_type=""
+
+version_flag=""
+
+text_event () {
+  text=$1
+
+  echo "$text" 
+}
+
+error_handle () {
+  text=$1
+  number=$2
+
+  echo "$text" 
+
+  exit $number
+}
+
+# Flags
+
+#TODO LATER: Make an flag to create a default rclone remote
+
+#TODO: Make that the -r flag can run multiples remotes
+
+while getopts 'f:r:e:o:hv' flag; do
+  case "${flag}" in
+    f) file_folder="${OPTARG}" ;;
+    r) rclone_remote="${OPTARG}" ;;
+    e) encryption_file_name="${OPTARG}" & encryption_flag="True" ;;
+    h) helper_flag="True" ;;
+    v) version_flag="True" ;;
+  esac
+done
+
+# Checks before running the code
+
+if [[ "${helper_flag}" == "True" ]]; then
+  echo "-f [path to folder or file] (Required)"
+  echo "-r [rclone remote path] (Required)"
+  echo "-e [gpg recipient] (Optional)"
+  echo "-h helper flag"
+  echo "-v version of script"
+  exit 0
+fi
+
+if [[ "${version_flag}" == "True" ]]; then
+  echo $version
+  exit 0
+fi
+
+if [ ! -d "${main_path}/backup-logs" ]; then
+  mkdir $main_path/backup-logs
+  #log that folder logs was created
+fi
+
+for i in ${dependecies_commands[@]}; do
+  if ! command -v $i > /dev/null; then
+    echo "Command $i could not be found"
+    exit 1
+  fi
+done
+
+if [[ "${file_folder}" == "" ]]; then
+  echo "Folder or file path not defined"
+  echo "Please use the flag -f [path]"
+  exit 1   
+elif [ -d "${file_folder}" ]; then
+  file_type="folder"
+elif [ -f "${file_folder}" ]; then 
+  echo "${file_folder} is a file"
+  file_type="file"
+else 
+  echo "Invalid Path, check if file or folder exists."
+  exit 1
+fi
+
+if [[ "$rclone_remote" == "" ]]; then
+  echo "Default rclone remote not found, please assign a remote using the flag -r [remote]"
+  exit 1
+fi
+
+# End of checks
+
+# Clear the log file
+# I could just use the rm, but this one is fine.
+
+if compgen -G "$main_path/backup-logs/$log_latest" > /dev/null; then
+  truncate -s 0 $main_path/backup-logs/$log_latest
+fi
+  
+touch $log_path/latest.log
+
+
+text_event "Starting backup at $file_folder"
+
+text_event "Saving in a zip file..."
+
+# Make 
+
+# Should make an folder to save the zip file, rather then saving it on the script folder and make a option to keep the file!
+
+zip -r $main_path/$nome.zip $file_folder >> $log_path/$log_latest && text_event "Files saved on a zip file!" || error_handle "Zip command failed" 1 
+
+#text_event "Encriptando o arquivo com o recipente $recipiente_gpg..."
+if [[ "${encryption_flag}" == "True" ]]; then
+  gpg -e --output $main_path/$nome.gpg --recipient $recipiente_gpg $main_path/$nome.zip >> $log_path/$log_latest && text_event "File encrypted successfully" || error_handle "Gpg command failed" 1 
+fi
+
+text_event "Moving file to $rclone_remote"
+
+rclone move  --log-file=$log_path/$log_latest $main_path/$nome.zip $rclone_remote && text_event "File send to $rclone_remote"  || error_handle "Rclone command failed" 1
+
+cp $log_path/$log_latest $log_path/$log_data
+
