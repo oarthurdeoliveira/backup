@@ -8,8 +8,16 @@ main_path="$(dirname $temp)"
 nome="linux-$(date +%d-%m-%Y)"
 log_latest="latest.log"
 log_data="log-$(date +%d-%m-%Y).log"
-log_path=$main_path/backup-logs/
-version="0.2.2"
+version="0.2.3"
+
+# Data dirs
+main_data_dir=$HOME/.local/share/backup
+log_data_dir=$main_data_dir/logs
+config_data_dir=$main_data_dir/config
+zip_data_dir=$main_data_dir/files
+
+regex_config="[a-z0-9_]+=(.*)"
+
 
 dependecies_commands=("rclone" "zip")
 
@@ -37,11 +45,50 @@ error_handle () {
   exit $number
 }
 
+reset_config_file () {
+  > $config_data_dir/default.conf
+  echo "rclone_default=" >> $config_data_dir/default.conf
+  echo "path_default=" >> $config_data_dir/default.conf
+}
+
+read_store_value () {
+  while IFS="" read -ra line; do
+
+    if [[ "$line" =~ $regex_config ]]; then
+
+      if [[ $line = *"path"* ]]; then
+        file_folder="${BASH_REMATCH[1]}"
+        
+      elif [[ $line = *"rclone"* ]]; then
+        rclone_remote="${BASH_REMATCH[1]}"
+      fi
+
+    fi
+  done < "$config_data_dir/default.conf"
+}
+
+if [ ! -d "${main_data_dir}" ]; then
+  mkdir $main_data_dir
+  mkdir $log_data_dir
+  mkdir $config_data_dir
+  mkdir $zip_data_dir
+
+  #echo "check .local"
+  #log that folder logs was created
+fi
+
+# Read config files
+
+  # First time
+if [ ! -e "${config_data_dir}/default.conf" ]; then
+  touch $config_data_dir/default.conf
+  echo "rclone_default=" >> $config_data_dir/default.conf
+  echo "path_default" >> $config_data_dir/default.conf
+fi
+
+read_store_value
+
 # Flags
-
-#TODO LATER: Make an flag to create a default rclone remote
-
-#TODO: Make that the -r flag can run multiples remotes
 
 while getopts 'f:r:e:o:hv' flag; do
   case "${flag}" in
@@ -52,6 +99,75 @@ while getopts 'f:r:e:o:hv' flag; do
     v) version_flag="True" ;;
   esac
 done
+
+# Commands checks
+
+if [[ $1 == "config" ]]; then
+
+  rclone_default=""
+  path_default=""
+  gpg_default=""
+
+  read_change_file ()  {
+    text_find=$1
+    change_part=$2
+
+    while IFS="" read -ra line; do
+      if [[ "$line" =~ $regex_config ]]; then
+
+        if [[ $line = *"$text_find"* ]]; then
+          sed -i "s#$line#$change_part#" $config_data_dir/default.conf
+        fi
+
+                elif [[ $line = *"rclone"* ]]; then
+          sed -i "s#$line#rclone_default=$rclone_default#" $config_data_dir/default.conf
+      fi
+    done < "$config_data_dir/default.conf"
+  }
+
+  config_text () {
+    echo "Rclone default: $rclone_remote"
+    echo "Path to backup: $file_folder"
+    echo ""
+
+    echo "r) to change the rclone remote"
+    echo "p) to change the path"
+    echo "e) to exit"
+  }
+
+  config_text
+
+  while true; do
+    read -p "r/p/e -> " option
+    changed=0
+
+    if [[ $option == "e" ]]; then
+      exit 1
+    elif [[ $option == "p" ]]; then
+      read -p "Write the path of your system to default: " path_default
+      read_change_file path path_default=$path_default
+      changed=1
+    elif [[ $option == "r" ]]; then
+      read -p "Write the rclone remote you want to default: " rclone_default
+      read_change_file rclone rclone_default=$rclone_default
+      changed=1
+    fi
+
+    if [[ $changed == 1 ]]; then
+      clear
+      read_store_value
+      config_text
+    fi
+
+
+  done
+
+  # Should make better texts
+  
+  
+  #gpg need more working
+  exit
+fi
 
 # Checks before running the code
 
@@ -69,10 +185,6 @@ if [[ "${version_flag}" == "True" ]]; then
   exit 0
 fi
 
-if [ ! -d "${main_path}/backup-logs" ]; then
-  mkdir $main_path/backup-logs
-  #log that folder logs was created
-fi
 
 for i in ${dependecies_commands[@]}; do
   if ! command -v $i > /dev/null; then
@@ -84,15 +196,19 @@ done
 if [[ "${file_folder}" == "" ]]; then
   echo "Folder or file path not defined"
   echo "Please use the flag -f [path]"
+  echo "Or define a default one using 'backup config'"
   exit 1   
-elif [ -d "${file_folder}" ]; then
-  file_type="folder"
-elif [ -f "${file_folder}" ]; then 
-  echo "${file_folder} is a file"
-  file_type="file"
-else 
-  echo "Invalid Path, check if file or folder exists."
-  exit 1
+#FIXME: For some reason, with the variable from the config it doesnt work anymore, need to check it later
+# Altough the code without this run just fine, hm...
+
+#elif [ -d "${file_folder}" ]; then
+#  file_type="folder"
+#elif [ -f "${file_folder}" ]; then 
+#  echo "${file_folder} is a file"
+#  file_type="file"
+#else 
+#  echo "Invalid Path, check if file or folder exists."
+#  exit 1
 fi
 
 if [[ "$rclone_remote" == "" ]]; then
@@ -105,11 +221,11 @@ fi
 # Clear the log file
 # I could just use the rm, but this one is fine.
 
-if compgen -G "$main_path/backup-logs/$log_latest" > /dev/null; then
-  truncate -s 0 $main_path/backup-logs/$log_latest
+if compgen -G "$log_data_dir/$log_latest" > /dev/null; then
+  truncate -s 0 $log_data_dir/$log_latest
 fi
-  
-touch $log_path/latest.log
+
+touch $log_data_dir/$log_latest
 
 
 text_event "Starting backup at $file_folder"
@@ -120,16 +236,16 @@ text_event "Saving in a zip file..."
 
 # Should make an folder to save the zip file, rather then saving it on the script folder and make a option to keep the file!
 
-zip -r $main_path/$nome.zip $file_folder >> $log_path/$log_latest && text_event "Files saved on a zip file!" || error_handle "Zip command failed" 1 
+zip -r $zip_data_dir/$nome.zip $file_folder >> $log_data_dir/$log_latest && text_event "Files saved on a zip file!" || error_handle "Zip command failed" 1 
 
 #text_event "Encriptando o arquivo com o recipente $recipiente_gpg..."
 if [[ "${encryption_flag}" == "True" ]]; then
-  gpg -e --output $main_path/$nome.gpg --recipient $recipiente_gpg $main_path/$nome.zip >> $log_path/$log_latest && text_event "File encrypted successfully" || error_handle "Gpg command failed" 1 
+  gpg -e --output $main_path/$nome.gpg --recipient $recipiente_gpg $main_path/$nome.zip >> $log_data_dir/$log_latest && text_event "File encrypted successfully" || error_handle "Gpg command failed" 1 
 fi
 
 text_event "Moving file to $rclone_remote"
 
-rclone move  --log-file=$log_path/$log_latest $main_path/$nome.zip $rclone_remote && text_event "File send to $rclone_remote"  || error_handle "Rclone command failed" 1
+rclone move  --log-file=$log_data_dir/$log_latest $zip_data_dir/$nome.zip $rclone_remote && text_event "File send to $rclone_remote"  || error_handle "Rclone command failed" 1
 
-cp $log_path/$log_latest $log_path/$log_data
+cp $log_data_dir/$log_latest $log_data_dir/$log_data
 
